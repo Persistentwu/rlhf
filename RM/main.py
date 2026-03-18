@@ -11,7 +11,7 @@ import swanlab
 import json
 import os
 import random
-
+from peft import LoraConfig, get_peft_model
 # ==========================================
 # 0. 环境配置
 # ==========================================
@@ -37,7 +37,17 @@ class MultiDimensionRewardModel(nn.Module):
             device_map=device,
             trust_remote_code=True
         )
-            
+        peft_config = LoraConfig(
+            task_type="CAUSAL_LM",
+            inference_mode=False,
+            r=8, 
+            lora_alpha=32,
+            lora_dropout=0.1,
+            target_modules=["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"] # 针对 Qwen 系列
+        )
+        self.model = get_peft_model(self.model, peft_config)
+        self.model.print_trainable_parameters()    
+
         self.tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
         self.hidden_size = self.model.config.hidden_size
         
@@ -50,14 +60,29 @@ class MultiDimensionRewardModel(nn.Module):
         })
 
     def forward(self, input_ids, attention_mask, dimension='quality'):
-        outputs = self.model(input_ids=input_ids, attention_mask=attention_mask)
-        last_hidden_state = outputs.hidden_states[-1]
+        # 显式传入 output_hidden_states=True
+        outputs = self.model(
+            input_ids=input_ids, 
+            attention_mask=attention_mask,
+            output_hidden_states=True,  # 确保这里显式开启
+            return_dict=True            # 确保返回的是对象而不是 tuple
+        )
         
-        # 优化：根据 attention_mask 找到真正的最后一个有效 token (防止 padding 干扰)
-        # 假设使用的是右 padding (Trainer 默认行为)
+        # 针对 PEFT 包装后的模型，安全地获取 hidden_states
+        if hasattr(outputs, "hidden_states") and outputs.hidden_states is not None:
+            last_hidden_state = outputs.hidden_states[-1]
+        else:
+            # 备选方案：如果 hidden_states 依然拿不到，尝试从 base_model 的输出中拿
+            # 或者直接取最后输出的 logits 之前的那个 hidden state（取决于具体模型实现）
+            raise ValueError("Model output does not contain hidden_states. Check if output_hidden_states=True is effective.")
+
+        # 找到真正的最后一个 token (防止 padding 干扰)
         last_token_indices = attention_mask.sum(dim=1) - 1
+        
+        # 这种 index 方式在某些混合精度下更稳定
         last_token_hidden = last_hidden_state[torch.arange(last_hidden_state.size(0)), last_token_indices]
         
+        # 打分
         score = self.score_heads[dimension](last_token_hidden).squeeze(-1)
         return score
     
@@ -81,7 +106,7 @@ class PreferenceDataset(Dataset):
             with open(data_path, 'r', encoding='utf-8') as f:
                 raw_data = [json.loads(line) for line in f]
             
-            for item in raw_data:
+            for item in raw_data[::3]:
                 prompt = item['prompt']
                 chosen = item['chosen']
                 
@@ -228,7 +253,7 @@ def main():
     training_args = TrainingArguments(
         output_dir=output_dir,
         num_train_epochs=1,
-        per_device_train_batch_size=1,
+        per_device_train_batch_size=4,
         per_device_eval_batch_size=8,
         gradient_accumulation_steps=8,
         learning_rate=1e-5,
