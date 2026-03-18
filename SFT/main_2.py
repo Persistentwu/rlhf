@@ -124,7 +124,7 @@ if __name__ == "__main__":
         output_dir="../output_sft/qwen_sft",
         per_device_train_batch_size=4,  # Qwen3-0.6B 很小，可以适当调大
         gradient_accumulation_steps=4, 
-        num_train_epochs=10,             # 多轮对话建议训练 3 轮左右以充分收敛
+        num_train_epochs=5,             # 多轮对话建议训练 3 轮左右以充分收敛
         learning_rate=3e-5,
         warmup_ratio=0.1,
         logging_steps=10,
