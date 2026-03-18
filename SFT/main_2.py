@@ -16,7 +16,7 @@ from transformers import (
 # 配置参数
 PROMPT = "你是一个电影知识回答专业助手，提供流畅自然的多轮对话"
 MAX_LENGTH = 1024
-MODEL_PATH = "../models"  # 请确保路径正确
+MODEL_PATH = "../model_1.7"  # 请确保路径正确
 TRAIN_DATA_PATH = "./film/sft_train.json"
 TEST_DATA_PATH = "./film/sft_test.json"
 
@@ -122,9 +122,9 @@ if __name__ == "__main__":
     # 训练参数配置
     training_args = TrainingArguments(
         output_dir="../output_sft/qwen_sft",
-        per_device_train_batch_size=4,  # Qwen3-0.6B 很小，可以适当调大
+        per_device_train_batch_size=1,  # Qwen3-0.6B 很小，可以适当调大
         gradient_accumulation_steps=4, 
-        num_train_epochs=5,             # 多轮对话建议训练 3 轮左右以充分收敛
+        num_train_epochs=2,             # 多轮对话建议训练 3 轮左右以充分收敛
         learning_rate=3e-5,
         warmup_ratio=0.1,
         logging_steps=10,
@@ -134,8 +134,9 @@ if __name__ == "__main__":
         save_total_limit=2,
         bf16=True,                      # 强力推荐使用 bf16
         gradient_checkpointing=True,
+        save_strategy='no',
         report_to=["swanlab"],
-        run_name="qwen3-movie-multi-turn-epoch10"
+        run_name="qwen3-1.7B"
     )
 
     # 使用 DataCollator 处理 Padding
@@ -157,7 +158,7 @@ if __name__ == "__main__":
     trainer.train()
     
     # 保存最终模型
-    # trainer.save_model("../output_sft/qwen_sft")
-    # tokenizer.save_pretrained("../output_sft/qwen_sft")
+    trainer.save_model("../output_sft/qwen_sft")
+    tokenizer.save_pretrained("../output_sft/qwen_sft")
     
     swanlab.finish()
