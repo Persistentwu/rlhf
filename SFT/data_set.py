@@ -39,17 +39,17 @@ def convert_dialogue(input_file, output_file):
                     "content": message_text
                 })
                 cnt += 1
-            output_sample = {
-                "conversations": conversations
-            }
-            fout.write(json.dumps(output_sample, ensure_ascii=False) + '\n')
+                output_sample = {
+                    "conversations": conversations.copy()
+                }
+                if cnt % 2 == 0:
+                    fout.write(json.dumps(output_sample, ensure_ascii=False) + '\n')
 
 
 if __name__ == "__main__":
     # 输入输出文件路径
-    input_file = "d:/VsCodeProj/RL/SFT/data/film/test.json"
-    output_file = "d:/VsCodeProj/RL/SFT/data/film/sft_test.json"
-    
+    input_file = "film/test.json"
+    output_file = "data/sft_test.json"
     
     
     convert_dialogue(input_file, output_file)
