@@ -247,7 +247,7 @@ def main():
         cliprange=config.cliprange,
         cliprange_value=config.cliprange_value,
         vf_coef=config.vf_coef,
-        response_length = 48,
+        response_length = 128,
         # 传递你的生成参数
         # **config.gen_kwargs 
         report_to=["swanlab"]
@@ -267,14 +267,6 @@ def main():
     )
     
 
-    batch = next(iter(ppo_trainer.dataloader))
-
-    print("input_ids max:", batch["input_ids"].max())
-    print("input_ids min:", batch["input_ids"].min())
-    print("vocab_size:", actor_model.config.vocab_size)
-    print("pad_token_id:", tokenizer.pad_token_id)
-    # 9. 一键训练
-    print("开始训练...")
 
     def dummy_disable_gc(self):
         pass
