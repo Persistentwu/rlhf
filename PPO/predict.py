@@ -12,14 +12,13 @@ def chat_with_model():
         model_path, 
         torch_dtype=torch.bfloat16, 
         device_map="auto", 
-        trust_remote_code=True
+        trust_remote_code=True,
+        use_safetensors=True
     ).eval()
 
     # 2. 初始化对话历史
     # 必须包含 System Prompt，这是模型角色的“定海神针”
-    messages = [
-        {"role": "system", "content": "你是一个电影知识回答专业助手，提供流畅自然的多轮对话"}
-    ]
+    messages = []
 
     print("--- 已进入电影助手对话模式 (输入 'exit' 退出) ---")
 
@@ -47,12 +46,12 @@ def chat_with_model():
         with torch.no_grad():
             generated_ids = model.generate(
                 **model_inputs,
-                max_new_tokens=512,
+                max_new_tokens=64,
                 do_sample=True,
-                top_p=0.85,
-                temperature=0.6,
+                top_p=0.8,
+                temperature=0.3,
                 repetition_penalty=1.15, # 抑制复读
-                eos_token_id=tokenizer.eos_token_id
+                
             )
         
         # 截取生成的部分
@@ -66,8 +65,9 @@ def chat_with_model():
         messages.append({"role": "assistant", "content": response})
 
         # 限制历史长度，防止超过 MAX_LENGTH (可选)
-        if len(messages) > 11: # 保留最近 5 轮左右的对话
-            messages = [messages[0]] + messages[-10:]
+        # if len(messages) > 11: # 保留最近 5 轮左右的对话
+        #     messages = [messages[0]] + messages[-10:]
+
 
 if __name__ == "__main__":
     chat_with_model()

@@ -238,7 +238,7 @@ class RewardTrainer(Trainer):
 # 5. 主流程
 # ==========================================
 def main():
-    model_path = "../output_sft/qwen_sft" 
+    model_path = "../output_sft/qwen_sft_final" 
     train_path = "data/neg_train.json"
     test_path = "data/neg_test.json"
     output_dir = "../rm_models"
