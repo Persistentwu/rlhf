@@ -17,10 +17,10 @@ def chat_with_model():
 
     # 2. 初始化对话历史
     # 必须包含 System Prompt，这是模型角色的“定海神针”
-    messages = [
-        {"role": "system", "content": "你是一个电影知识回答专业助手，提供流畅自然的多轮对话"}
-    ]
-
+    # messages = [
+    #     {"role": "system", "content": "你是一个电影知识回答专业助手，提供流畅自然的多轮对话"}
+    # ]
+    messages = []
     print("--- 已进入电影助手对话模式 (输入 'exit' 退出) ---")
 
     while True:
@@ -40,9 +40,7 @@ def chat_with_model():
             tokenize=False,
             add_generation_prompt=True
         )
-        
         model_inputs = tokenizer([text], return_tensors="pt").to(model.device)
-
         # 4. 生成回复
         # 增加 repetition_penalty 是解决“好的谢谢”复读的关键
         with torch.no_grad():
@@ -69,6 +67,7 @@ def chat_with_model():
         # 限制历史长度，防止超过 MAX_LENGTH (可选)
         if len(messages) > 11: # 保留最近 5 轮左右的对话
             messages = [messages[0]] + messages[-10:]
+
 
 if __name__ == "__main__":
     chat_with_model()

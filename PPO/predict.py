@@ -1,86 +1,73 @@
-import json
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from swanlab import login
 
-# [可选] 登录 SwanLab (如果需要记录日志)
-# login(api_key="...", save=True)
-
-# 1. 设置路径
-# 请将此路径修改为您实际保存的微调模型路径 (即 output_dir 中的 best model 或 checkpoint)
-# 例如: "../output_sft/checkpoint-500"
-ppo_model_path = "../ppo_models" 
-safetensors_path = "../ppo_models/final_actor_model"
-
-# 2. 加载 Tokenizer 和 Model
-tokenizer = AutoTokenizer.from_pretrained(ppo_model_path, trust_remote_code=True)
-model = AutoModelForCausalLM.from_pretrained(
-    safetensors_path, 
-    device_map="auto", 
-    trust_remote_code=True,
-    use_safetensors=True
-)
-# 设置为评估模式
-model.eval()
-
-def predict(text, max_length=512, top_p=0.7, temperature=0.1):
-    """
-    输入用户文本，使用加载的模型生成回复
-    Args:
-        text (str): 用户的输入问题/指令
-        max_length (int): 生成序列的最大长度
-        top_p (float): 核采样参数
-        temperature (float): 温度参数，控制随机性
-        
-    Returns:
-        str: 模型生成的回复
-    """
-    # 1. 构造 Prompt
-    # 注意：这里的 Prompt 格式必须与您训练时的格式完全一致！
-    # 根据 convert_feature 函数，训练时并没有显式添加 <|im_start|> 等特殊字符，
-    # 而是直接拼接了 user 和 assistant 的内容。
-    # 为了让模型知道要回答，我们需要手动拼接，并在最后留出空格或特定标记让模型开始生成。
-    # 假设训练时格式简单拼接为 "User内容Assistant内容"，我们这里构造如下：
-    prompt = text 
+def chat_with_model():
+    # 1. 加载模型和分词器
+    model_path = "../ppo_models/final_actor_model" # 指向你训练保存的路径
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     
-    # 2. Tokenize
-    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
-    
-    # 3. 生成
-    with torch.no_grad():
-        generation_output = model.generate(
-            **inputs,
-            max_new_tokens=max_length,     # 最多生成多少个新 token
-            do_sample=True,                # 是否使用采样 (False 则是贪婪搜索)
-            top_p=top_p,                   # 核采样
-            temperature=temperature,       # 温度
-            repetition_penalty=1.0,        # 重复惩罚
-            pad_token_id=tokenizer.pad_token_id,
-            eos_token_id=tokenizer.eos_token_id
+    print(f"正在加载模型至 {device}...")
+    tokenizer = AutoTokenizer.from_pretrained("../ppo_models", trust_remote_code=True)
+    model = AutoModelForCausalLM.from_pretrained(
+        model_path, 
+        torch_dtype=torch.bfloat16, 
+        device_map="auto", 
+        trust_remote_code=True
+    ).eval()
+
+    # 2. 初始化对话历史
+    # 必须包含 System Prompt，这是模型角色的“定海神针”
+    messages = [
+        {"role": "system", "content": "你是一个电影知识回答专业助手，提供流畅自然的多轮对话"}
+    ]
+
+    print("--- 已进入电影助手对话模式 (输入 'exit' 退出) ---")
+
+    while True:
+        user_input = input("User: ").strip()
+        if user_input.lower() in ["exit", "quit", "退出"]:
+            break
+        if not user_input:
+            continue
+
+        # 将用户输入加入历史
+        messages.append({"role": "user", "content": user_input})
+
+        # 3. 构造推理输入
+        # apply_chat_template 会自动根据 Qwen 格式拼接所有历史轮次
+        text = tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True
         )
-    
-    # 4. 解码
-    # 切片操作 [len(inputs["input_ids"][0]):] 是为了去掉输入的 prompt 部分，只保留生成的回复
-    s = generation_output[0][len(inputs["input_ids"][0]):]
-    output = tokenizer.decode(s, skip_special_tokens=True)
-    
-    return output
+        model_inputs = tokenizer([text], return_tensors="pt").to(model.device)
+       
+        # 4. 生成回复
+        # 增加 repetition_penalty 是解决“好的谢谢”复读的关键
+        with torch.no_grad():
+            generated_ids = model.generate(
+                **model_inputs,
+                max_new_tokens=512,
+                do_sample=True,
+                top_p=0.85,
+                temperature=0.6,
+                repetition_penalty=1.15, # 抑制复读
+                eos_token_id=tokenizer.eos_token_id
+            )
+        
+        # 截取生成的部分
+        input_ids_len = model_inputs.input_ids.shape[1]
+        response_ids = generated_ids[0][input_ids_len:]
+        response = tokenizer.decode(response_ids, skip_special_tokens=True).strip()
+
+        print(f"Assistant: {response}")
+
+        # 5. 将模型的回复加入历史，实现“记忆”
+        messages.append({"role": "assistant", "content": response})
+
+        # 限制历史长度，防止超过 MAX_LENGTH (可选)
+        if len(messages) > 11: # 保留最近 5 轮左右的对话
+            messages = [messages[0]] + messages[-10:]
 
 if __name__ == "__main__":
-    # 测试预测
-    user_input = "帮我介绍七宗罪这部电影"
-    
-    response = predict(user_input)
-    print(f"模型回复: {response}")
-
-    # 针对测试集 JSONL，也可以批量处理
-    # test_file = "./film/sft_test.json"
-    # with open(test_file, 'r', encoding='utf-8') as f:
-    #     for line in f:
-    #         data = json.loads(line)
-    #         # 假设您的数据格式里有 'conversations' 或者 'input' 字段
-    #         # 需要根据实际数据提取出最后一条 user 的输入
-    #         query = data['conversations'][-2]['content'] # 获取倒数第二条(通常是user)的内容
-    #         print(f"问题: {query}")
-    #         res = predict(query)
-    #         print(f"回答: {res}\n{'-'*20}")
+    chat_with_model()
