@@ -187,3 +187,5 @@ if __name__ == "__main__":
 
     # gen_data(train_data_path, train_output_path)
     gen_data(test_data_path, test_output_path)
+
+# 产生效果：负样本生成质量差，原因在于负样本的四个维度存在语义重叠现象

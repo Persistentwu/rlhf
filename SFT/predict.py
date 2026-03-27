@@ -3,7 +3,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 def chat_with_model():
     # 1. 加载模型和分词器
-    model_path = "../output_sft/qwen_sft" # 指向你训练保存的路径
+    model_path = "../output_sft/qwen_sft_final" # 指向你训练保存的路径
     device = "cuda" if torch.cuda.is_available() else "cpu"
     
     print(f"正在加载模型至 {device}...")

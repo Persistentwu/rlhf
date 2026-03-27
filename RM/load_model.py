@@ -1,5 +1,5 @@
 import torch
-from RM.train_first import MultiDimensionRewardModel
+# from RM.train_first import MultiDimensionRewardModel
 import os
 from safetensors.torch import load_file
 

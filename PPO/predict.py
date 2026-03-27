@@ -3,7 +3,8 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 def chat_with_model():
     # 1. 加载模型和分词器
-    model_path = "../grpo_models/final_actor_model" # 指向你训练保存的路径
+    model_path = "../model_1.7" # 指向你训练保存的路径
+    model_path = "../output_sft/qwen_sft_final"
     device = "cuda" if torch.cuda.is_available() else "cpu"
     
     print(f"正在加载模型至 {device}...")
@@ -18,7 +19,7 @@ def chat_with_model():
 
     # 2. 初始化对话历史
     # 必须包含 System Prompt，这是模型角色的“定海神针”
-    messages = []
+    messages = [{"role": "system", "content": "你是一个电影助手，请根据用户的问题回答关于电影的信息。"}]
 
     print("--- 已进入电影助手对话模式 (输入 'exit' 退出) ---")
 
@@ -46,10 +47,10 @@ def chat_with_model():
         with torch.no_grad():
             generated_ids = model.generate(
                 **model_inputs,
-                max_new_tokens=64,
+                max_new_tokens=40,
                 do_sample=True,
                 top_p=0.8,
-                temperature=0.3,
+                temperature=0.4,
                 repetition_penalty=1.15, # 抑制复读
                 
             )
