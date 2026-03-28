@@ -3,7 +3,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 def chat_with_model():
     # 1. 加载模型和分词器
-    model_path = "../output_sft/qwen_sft_final" # 指向你训练保存的路径
+    model_path = "../output_sft/checkpoint-3200" # 指向你训练保存的路径
     device = "cuda" if torch.cuda.is_available() else "cpu"
     
     print(f"正在加载模型至 {device}...")
@@ -48,9 +48,9 @@ def chat_with_model():
                 **model_inputs,
                 max_new_tokens=512,
                 do_sample=True,
-                top_p=0.85,
-                temperature=0.6,
-                repetition_penalty=1.15, # 抑制复读
+                top_p=1,
+                temperature=0.3,
+                repetition_penalty=1.1, # 抑制复读
                 eos_token_id=tokenizer.eos_token_id
             )
         
