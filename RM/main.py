@@ -12,13 +12,14 @@ import json
 import os
 import random
 from peft import LoraConfig, get_peft_model
+
 # ==========================================
 # 0. 环境配置
 # ==========================================
 api_key = os.environ.get("SWANLAB_api")
 swanlab.login(api_key=api_key, save=True)
 swanlab.config.update({
-    "model": "Qwen_RM/Qwen3-0.6B",
+    "model": "Qwen_RM/Qwen3-1.7B",
     "framework": "PyTorch",
 })
 
@@ -43,7 +44,7 @@ class MultiDimensionRewardModel(nn.Module):
             r=8, 
             lora_alpha=32,
             lora_dropout=0.1,
-            target_modules=["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"] # 针对 Qwen 系列
+            target_modules=["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
         )
         self.model = get_peft_model(self.model, peft_config)
         self.model.print_trainable_parameters()    
@@ -53,48 +54,70 @@ class MultiDimensionRewardModel(nn.Module):
         
         # 定义四个维度的打分头
         self.score_heads = nn.ModuleDict({
-            'consistency': nn.Linear(self.hidden_size, 1),
-            'relevance': nn.Linear(self.hidden_size, 1),
-            'coherence': nn.Linear(self.hidden_size, 1),
-            'quality': nn.Linear(self.hidden_size, 1)
+            'consistency': nn.Sequential(
+                nn.Linear(self.hidden_size, 512),
+                nn.ReLU(),
+                nn.Dropout(0.2),
+                nn.Linear(512, 256),
+                nn.ReLU(),
+                nn.Dropout(0.2),
+                nn.Linear(256, 1)
+            ),
+            'relevance': nn.Sequential(
+                nn.Linear(self.hidden_size, 512),
+                nn.ReLU(),
+                nn.Dropout(0.2),
+                nn.Linear(512, 256),
+                nn.ReLU(),
+                nn.Dropout(0.2),
+                nn.Linear(256, 1)
+            ),
+            'coherence': nn.Sequential(
+                nn.Linear(self.hidden_size, 512),
+                nn.ReLU(),
+                nn.Dropout(0.2),
+                nn.Linear(512, 256),
+                nn.ReLU(),
+                nn.Dropout(0.2),
+                nn.Linear(256, 1)
+            ),
+            'quality': nn.Sequential(
+                nn.Linear(self.hidden_size, 512),
+                nn.ReLU(),
+                nn.Dropout(0.2),
+                nn.Linear(512, 256),
+                nn.ReLU(),
+                nn.Dropout(0.2),
+                nn.Linear(256, 1)
+            )
         })
 
     def forward(self, input_ids, attention_mask, dimension='quality'):
-        # 显式传入 output_hidden_states=True
         outputs = self.model(
             input_ids=input_ids, 
             attention_mask=attention_mask,
-            output_hidden_states=True,  # 确保这里显式开启
-            return_dict=True            # 确保返回的是对象而不是 tuple
+            output_hidden_states=True,
+            return_dict=True
         )
         
-        # 针对 PEFT 包装后的模型，安全地获取 hidden_states
         if hasattr(outputs, "hidden_states") and outputs.hidden_states is not None:
             last_hidden_state = outputs.hidden_states[-1]
         else:
-            # 备选方案：如果 hidden_states 依然拿不到，尝试从 base_model 的输出中拿
-            # 或者直接取最后输出的 logits 之前的那个 hidden state（取决于具体模型实现）
-            raise ValueError("Model output does not contain hidden_states. Check if output_hidden_states=True is effective.")
+            raise ValueError("Model output does not contain hidden_states.")
 
-        # 找到真正的最后一个 token (防止 padding 干扰)
         last_token_indices = attention_mask.sum(dim=1) - 1
-        
-        # 这种 index 方式在某些混合精度下更稳定
         last_token_hidden = last_hidden_state[torch.arange(last_hidden_state.size(0)), last_token_indices]
-        
-        # 打分
         score = self.score_heads[dimension](last_token_hidden).squeeze(-1)
         return score
     
     def gradient_checkpointing_enable(self, **kwargs):
-        """转发给基座模型"""
         self.model.gradient_checkpointing_enable(**kwargs)
 
     def gradient_checkpointing_disable(self):
-        """转发给基座模型"""
         self.model.gradient_checkpointing_disable()
+
 # ==========================================
-# 2. 定义 Dataset (对齐 SFT 格式)
+# 2. 定义 Dataset - 使用 apply_chat_template
 # ==========================================
 class PreferenceDataset(Dataset):
     def __init__(self, data_path, tokenizer, max_length=512):
@@ -104,33 +127,55 @@ class PreferenceDataset(Dataset):
         
         if os.path.exists(data_path):
             with open(data_path, 'r', encoding='utf-8') as f:
-                raw_data = [json.loads(line) for line in f]
+                raw_data = []
+                for line in f:
+                    try:
+                        data = json.loads(line)
+                        raw_data.append(data)
+                    except json.JSONDecodeError as e:
+                        print(f"Error parsing line: {line[:100]}...")
+                        continue
             
-            for item in raw_data[::3]:
-                prompt = item['prompt']
-                chosen = item['chosen']
+            for item in raw_data:
+                conversations = item.get('conversations', [])
+                if len(conversations) < 2:
+                    continue
                 
-                # 与 SFT 格式完全对齐的拼接函数
-                def format_qwen_chat(p, r):
-                    system_text = "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n"
-                    user_text = f"<|im_start|>user\n{p}<|im_end|>\n"
-                    assistant_text = f"<|im_start|>assistant\n{r}<|im_end|>\n"
-                    return system_text + user_text + assistant_text
-
+                # 提取用户问题和助手回答
+                user_msg = None
+                assistant_msg = None
+                for conv in conversations:
+                    if conv['role'] == 'user':
+                        user_msg = conv
+                    elif conv['role'] == 'assistant':
+                        assistant_msg = conv
+                
+                if user_msg is None or assistant_msg is None:
+                    continue
+                
+                # 输入部分：只有用户消息
+                input_messages = [user_msg]
+                
+                # 获取 chosen 回答
+                chosen_response = item['chosen']['content']
+                
                 dimensions = ['consistency', 'relevance', 'coherence', 'quality']
                 for dim in dimensions:
                     rejected_key = f'rejected_{dim}'
                     if rejected_key in item:
+                        rejected_response = item[rejected_key]['content']
+                        
+                        # 使用 apply_chat_template 格式化
                         self.data.append({
-                            'text_chosen': format_qwen_chat(prompt, chosen),
-                            'text_rejected': format_qwen_chat(prompt, item[rejected_key]),
+                            'input_messages': input_messages,
+                            'chosen_response': chosen_response,
+                            'rejected_response': rejected_response,
                             'dimension': dim
                         })
             
-            # 全局打乱数据，防止维度扎堆
             random.seed(42)
             random.shuffle(self.data)
-            print(f"Loaded {len(self.data)} samples with ChatML format.")
+            print(f"Loaded {len(self.data)} samples with Chat Template format.")
         else:
             print(f"Warning: {data_path} not found.")
 
@@ -138,7 +183,34 @@ class PreferenceDataset(Dataset):
         return len(self.data)
 
     def __getitem__(self, idx):
-        return self.data[idx]
+        item = self.data[idx]
+        
+        # 构建完整对话
+        input_messages = item['input_messages']
+        chosen_response = item['chosen_response']
+        rejected_response = item['rejected_response']
+        
+        # 构建 chosen 完整对话
+        chosen_messages = input_messages + [{"role": "assistant", "content": chosen_response}]
+        chosen_text = self.tokenizer.apply_chat_template(
+            chosen_messages,
+            tokenize=False,
+            add_generation_prompt=False
+        )
+        
+        # 构建 rejected 完整对话
+        rejected_messages = input_messages + [{"role": "assistant", "content": rejected_response}]
+        rejected_text = self.tokenizer.apply_chat_template(
+            rejected_messages,
+            tokenize=False,
+            add_generation_prompt=False
+        )
+        
+        return {
+            'text_chosen': chosen_text,
+            'text_rejected': rejected_text,
+            'dimension': item['dimension']
+        }
 
 # ==========================================
 # 3. 定义 Data Collator
@@ -153,10 +225,23 @@ class RewardDataCollator:
         chosen_texts = [item['text_chosen'] for item in batch]
         rejected_texts = [item['text_rejected'] for item in batch]
         
-        # 注意：padding_side 建议在 main 中设为 left，如果使用 [-1] 逻辑
-        # 但我们用了 attention_mask.sum() 逻辑，右 padding 也可以
-        c_inputs = self.tokenizer(chosen_texts, padding=True, truncation=True, max_length=self.max_length, return_tensors="pt")
-        r_inputs = self.tokenizer(rejected_texts, padding=True, truncation=True, max_length=self.max_length, return_tensors="pt")
+        # apply_chat_template 已经包含了特殊token，所以设置为 False
+        c_inputs = self.tokenizer(
+            chosen_texts, 
+            padding=True, 
+            truncation=True, 
+            max_length=self.max_length, 
+            return_tensors="pt",
+            add_special_tokens=False
+        )
+        r_inputs = self.tokenizer(
+            rejected_texts, 
+            padding=True, 
+            truncation=True, 
+            max_length=self.max_length, 
+            return_tensors="pt",
+            add_special_tokens=False
+        )
         
         return {
             'input_ids_chosen': c_inputs['input_ids'],
@@ -183,7 +268,9 @@ class RewardTrainer(Trainer):
         
         dim_indices = {}
         for i, dim in enumerate(dimensions):
-            dim_indices.setdefault(dim, []).append(i)
+            if dim not in dim_indices:
+                dim_indices[dim] = []
+            dim_indices[dim].append(i)
         
         for dim, indices in dim_indices.items():
             idx_tensor = torch.tensor(indices).to(model.device)
@@ -195,7 +282,6 @@ class RewardTrainer(Trainer):
             chosen_scores = model(input_ids=c_ids, attention_mask=c_mask, dimension=dim)
             rejected_scores = model(input_ids=r_ids, attention_mask=r_mask, dimension=dim)
             
-            # 对齐公式：loss = -log(sigmoid(score_chosen - score_rejected))
             diff = chosen_scores - rejected_scores
             loss = loss_fct(diff, torch.ones_like(diff))
             total_loss += loss * len(indices)
@@ -215,12 +301,22 @@ class RewardTrainer(Trainer):
             diffs = torch.zeros(batch_size, device=model.device)
             dim_indices = {}
             for i, dim in enumerate(dimensions):
-                dim_indices.setdefault(dim, []).append(i)
+                if dim not in dim_indices:
+                    dim_indices[dim] = []
+                dim_indices[dim].append(i)
                 
             for dim, indices in dim_indices.items():
                 idx_tensor = torch.tensor(indices).to(model.device)
-                c_scores = model(input_ids_chosen.index_select(0, idx_tensor), attention_mask_chosen.index_select(0, idx_tensor), dimension=dim)
-                r_scores = model(input_ids_rejected.index_select(0, idx_tensor), attention_mask_rejected.index_select(0, idx_tensor), dimension=dim)
+                c_scores = model(
+                    input_ids_chosen.index_select(0, idx_tensor), 
+                    attention_mask_chosen.index_select(0, idx_tensor), 
+                    dimension=dim
+                )
+                r_scores = model(
+                    input_ids_rejected.index_select(0, idx_tensor), 
+                    attention_mask_rejected.index_select(0, idx_tensor), 
+                    dimension=dim
+                )
                 diffs[indices] = c_scores - r_scores
         
         labels = torch.ones_like(diffs)
@@ -229,7 +325,6 @@ class RewardTrainer(Trainer):
 
     def compute_metrics(self, eval_preds):
         logits, labels = eval_preds
-        # logits 这里是我们的分数差 diffs
         predictions = (logits > 0).astype(float)
         accuracy = (predictions == labels).mean().item()
         return {"eval_accuracy": accuracy}
@@ -238,13 +333,12 @@ class RewardTrainer(Trainer):
 # 5. 主流程
 # ==========================================
 def main():
-    model_path = "../output_sft/qwen_sft_final" 
-    train_path = "data/neg_train.json"
-    test_path = "data/neg_test.json"
+    model_path = "../output_sft/checkpoint-1086" # 指向你训练保存的路径
+    train_path = "data/negative_train_rm.jsonl"
+    test_path = "data/negative_test_rm.jsonl"
     output_dir = "../rm_models"
 
     model = MultiDimensionRewardModel(model_path)
-    # 确保 padding 在右侧，因为我们用了 sum(mask) 逻辑定位最后一个 token
     model.tokenizer.padding_side = 'right' 
     
     train_dataset = PreferenceDataset(train_path, model.tokenizer)
@@ -255,19 +349,20 @@ def main():
         num_train_epochs=1,
         per_device_train_batch_size=4,
         per_device_eval_batch_size=8,
-        gradient_accumulation_steps=8,
+        gradient_accumulation_steps=4,
         learning_rate=1e-5,
         fp16=True,
         logging_steps=10,
         eval_strategy="steps",
         eval_steps=100,
         save_steps=200,
-        save_strategy='no',
+        save_total_limit=1,
+        # save_strategy='no',
         load_best_model_at_end=False,
         gradient_checkpointing=True,
-        # metric_for_best_model="eval_loss",
         greater_is_better=False,
         remove_unused_columns=False,
+        run_name="qwen3-rm-multidim",
         report_to=["swanlab"]
     )
     
@@ -280,12 +375,10 @@ def main():
     )
     
     trainer.train()
-
-    trainer.save_model("../rm_models/best_model")
-
-    # 别忘了保存 Tokenizer，推理时需要用到同样的词表
-    model.tokenizer.save_pretrained("../rm_models/best_model")
+    # trainer.save_model("../rm_models/best_model")
+    # model.tokenizer.save_pretrained("../rm_models/best_model")
 
 
 if __name__ == "__main__":
+    
     main()
