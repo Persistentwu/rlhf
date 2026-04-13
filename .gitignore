@@ -1,0 +1,16 @@
+.vscode/
+models/
+output_sft/
+PPO/.vscode/
+PPO/swanlog/
+PPO/trainer_output/
+ppo_models/
+RM/__pycache__/
+RM/swanlog/
+rm_models/
+SFT/__pycache__/
+SFT/swanlog/
+swanlog/
+.env
+.load_model.py.swp
+load_model.py
