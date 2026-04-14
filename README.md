@@ -5,7 +5,7 @@
 - 带有 RM 的对齐算法（PPO、GRPO、DAPO、GSPO）训练不稳定的原因分析
 - 不带 RM 的对齐算法（DPO、KTO）训练稳定，但存在对话风格与数据集保持一致、事实一致性错误等问题
 - Reward Model 难以构建的根本原因探讨
-- 知乎链接：www.zhihu.com
+- 知乎链接：[www.zhihu.com](https://zhuanlan.zhihu.com/p/2024850929963345518)
 
 ### 训练曲线
 
